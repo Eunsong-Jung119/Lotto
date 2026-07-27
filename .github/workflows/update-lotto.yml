@@ -1,0 +1,46 @@
+name: Update Lotto Data
+
+# 매주 토요일 추첨(20:45 KST 전후) 이후 최신 당첨번호를 받아 lotto_data.json 을 갱신합니다.
+# 스크립트는 이미 있는 회차는 건드리지 않고, 새 회차가 없으면 커밋도 하지 않습니다(멱등).
+on:
+  schedule:
+    - cron: "30 12 * * 6"   # 토요일 21:30 KST (12:30 UTC) - 1차 시도
+    - cron: "0 3 * * 0"     # 일요일 12:00 KST (03:00 UTC) - 백업 시도
+  workflow_dispatch:          # 필요할 때 수동 실행
+
+# 기본 GITHUB_TOKEN 으로 리포에 커밋할 수 있도록 쓰기 권한 부여
+permissions:
+  contents: write
+
+concurrency:
+  group: update-lotto
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch latest lotto numbers
+        run: python scripts/update_lotto.py
+
+      - name: Commit updated data if changed
+        run: |
+          if [[ -n "$(git status --porcelain Lotto/lotto_data.json)" ]]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Lotto/lotto_data.json
+            LATEST=$(python -c "import json;print(json.load(open('Lotto/lotto_data.json'))['latestRound'])")
+            git commit -m "chore: update lotto data (latest round ${LATEST}) [skip ci]"
+            git push
+            echo "Pushed update for round ${LATEST}"
+          else
+            echo "No changes to commit."
+          fi
