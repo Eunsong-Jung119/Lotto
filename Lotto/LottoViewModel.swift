@@ -38,11 +38,15 @@ class LottoViewModel: ObservableObject {
     @Published var latestRound: Int = 0
     @Published var apiUpdateFailed: Bool = false
 
+    // 원격 데이터 주소: 앱을 재업로드하지 않아도 이 파일만 갱신되면 앱에 즉시 반영됩니다.
+    // GitHub Actions가 매주 토요일 추첨 후 이 파일을 자동으로 최신화합니다.
+    private static let remoteDataURL = "https://raw.githubusercontent.com/Eunsong-Jung119/Lotto/main/Lotto/lotto_data.json"
+
     init() {
         loadSavedNumbers()
-        loadBundleData()
+        loadBundleData()          // 오프라인/최초 실행용: 번들에 포함된 데이터를 즉시 표시
         Task {
-            await fetchLatestFromAPI()
+            await fetchRemoteData() // 온라인이면 GitHub의 최신 데이터로 갱신
         }
     }
 
@@ -52,13 +56,13 @@ class LottoViewModel: ObservableObject {
             return
         }
         print("✅ JSON URL: \(url)")
-        
+
         guard let data = try? Data(contentsOf: url) else {
             print("❌ 데이터 로드 실패")
             return
         }
         print("✅ 데이터 로드 성공: \(data.count) bytes")
-        
+
         guard let file = try? JSONDecoder().decode(LottoDataFile.self, from: data) else {
             print("❌ JSON 디코딩 실패")
             return
@@ -75,70 +79,36 @@ class LottoViewModel: ObservableObject {
         }
     }
 
-    func fetchLatestFromAPI() async {
-        let startRound = latestRound + 1
-        let calendar = Calendar.current
-        let startDate = calendar.date(from: DateComponents(year: 2002, month: 12, day: 7))!
-        let estimatedLatest = (calendar.dateComponents([.day], from: startDate, to: Date()).day ?? 0) / 7 + 1
-
-        guard estimatedLatest >= startRound else { return }
-
-        var newResults: [LottoResult] = []
-        for round in startRound...estimatedLatest {
-            if let result = await fetchRound(round: round) {
-                newResults.append(result)
-            }
-        }
-
-        if !newResults.isEmpty {
-            DispatchQueue.main.async {
-                for result in newResults {
-                    if !self.lottoHistory.contains(where: { $0.round == result.round }) {
-                        self.lottoHistory.append(result)
-                    }
-                }
-                self.lottoHistory.sort { $0.round > $1.round }
-                if let latest = self.lottoHistory.first { self.latestRound = latest.round }
-            }
-        } else {
-            DispatchQueue.main.async { self.apiUpdateFailed = true }
-            await notifyDeveloper(failedRound: startRound)
-        }
-    }
-
-    private func notifyDeveloper(failedRound: Int) async {
-        guard let url = URL(string: "https://formsubmit.co/ajax/eunsongjung1997@gmail.com") else { return }
+    // GitHub raw에서 최신 lotto_data.json을 받아와 갱신합니다.
+    // 실패하면 번들 데이터를 그대로 사용하므로 앱은 항상 동작합니다.
+    @MainActor
+    func fetchRemoteData() async {
+        guard let url = URL(string: Self.remoteDataURL) else { return }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String] = [
-            "subject": "로또앱 데이터 업데이트 필요",
-            "message": "\(failedRound)회차부터 API 실패. lotto_data.json 수동 업데이트 필요합니다."
-        ]
-        request.httpBody = try? JSONEncoder().encode(body)
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
-    private func fetchRound(round: Int) async -> LottoResult? {
-        let urlString = "https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=\(round)"
-        guard let url = URL(string: urlString) else { return nil }
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        request.setValue("https://www.dhlottery.co.kr/", forHTTPHeaderField: "Referer")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 10
+
         do {
             let (data, _) = try await URLSession.shared.data(for: request)
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let rv = json["returnValue"] as? String, rv == "success",
-               let drwNo = json["drwNo"] as? Int,
-               let n1 = json["drwtNo1"] as? Int, let n2 = json["drwtNo2"] as? Int,
-               let n3 = json["drwtNo3"] as? Int, let n4 = json["drwtNo4"] as? Int,
-               let n5 = json["drwtNo5"] as? Int, let n6 = json["drwtNo6"] as? Int,
-               let bonus = json["bnusNo"] as? Int, let dateStr = json["drwNoDate"] as? String {
-                return LottoResult(id: UUID(), numbers: [n1,n2,n3,n4,n5,n6], bonusNumber: bonus, round: drwNo, date: dateStr)
+            let file = try JSONDecoder().decode(LottoDataFile.self, from: data)
+
+            // 원격이 번들보다 최신일 때만 반영 (오래된 캐시로 되돌아가는 것 방지)
+            guard file.latestRound >= self.latestRound else {
+                self.apiUpdateFailed = false
+                return
             }
-        } catch {}
-        return nil
+
+            let results = file.history.map { entry in
+                LottoResult(id: UUID(), numbers: entry.numbers, bonusNumber: entry.bonus, round: entry.round, date: entry.date)
+            }.sorted { $0.round > $1.round }
+
+            self.latestRound = file.latestRound
+            self.lottoHistory = results
+            self.apiUpdateFailed = false
+        } catch {
+            // 네트워크 실패 시 번들 데이터 유지
+            self.apiUpdateFailed = true
+        }
     }
 
     func generateNumbers() {
