@@ -38,7 +38,7 @@ struct ContentView: View {
     // MARK: - Header
     var headerSection: some View {
         VStack(spacing: 8) {
-            Text("오늘의 행운을")
+            Text("오늘의 번호를")
                 .font(.system(size: 28, weight: .bold))
             Text("확인해보세요")
                 .font(.system(size: 28, weight: .bold))
