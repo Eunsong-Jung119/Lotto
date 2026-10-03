@@ -1,6 +1,19 @@
 {
-  "latestRound": 1243,
+  "latestRound": 1244,
   "history": [
+    {
+      "round": 1244,
+      "numbers": [
+        1,
+        13,
+        18,
+        26,
+        34,
+        38
+      ],
+      "bonus": 25,
+      "date": "2026-10-03"
+    },
     {
       "round": 1243,
       "numbers": [
